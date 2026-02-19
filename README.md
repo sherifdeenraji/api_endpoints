@@ -231,7 +231,48 @@ Authorization: Bearer <token>
 
 ## Doctor Endpoints
 
-### 8. Get All Doctors
+### 8. Create Doctor Profile
+**POST** `/doctors`
+
+**Description:** Create a doctor profile linked to user account
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Request Body:**
+```json
+{
+  "name": "Dr. James Smith",
+  "departmentId": "507f1f77bcf86cd799439011",
+  "specialization": "General Medicine",
+  "phoneNumber": "+1111111111",
+  "bio": "Experienced physician with 10+ years of practice",
+  "qualifications": "MD, Board Certified",
+  "licenseNumber": "LIC123456"
+}
+```
+
+**Response (201):**
+```json
+{
+  "id": 5,
+  "userId": 2,
+  "name": "Dr. James Smith",
+  "departmentId": "507f1f77bcf86cd799439011",
+  "specialization": "General Medicine",
+  "phoneNumber": "+1111111111",
+  "bio": "Experienced physician with 10+ years of practice",
+  "qualifications": "MD, Board Certified",
+  "licenseNumber": "LIC123456",
+  "createdAt": "2026-02-11T10:00:00Z"
+}
+```
+
+---
+
+### 9. Get All Doctors
 **GET** `/doctors`
 
 **Description:** Retrieve list of all doctors with filters
@@ -266,7 +307,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 9. Get Doctor Profile
+### 10. Get Doctor Profile
 **GET** `/doctors/:doctorId`
 
 **Description:** Retrieve detailed doctor profile
@@ -290,7 +331,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 10. Create Doctor Availability
+### 11. Create Doctor Availability
 **POST** `/doctors/:doctorId/availability`
 
 **Description:** Add available time slots for a doctor
@@ -325,7 +366,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 11. Get Doctor Availability
+### 12. Get Doctor Availability
 **GET** `/doctors/:doctorId/availability`
 
 **Description:** Retrieve all availability slots for a doctor
@@ -356,7 +397,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 12. Update Doctor Availability
+### 13. Update Doctor Availability
 **PUT** `/doctors/:doctorId/availability/:availabilityId`
 
 **Description:** Update an availability slot
@@ -389,7 +430,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 13. Delete Doctor Availability
+### 14. Delete Doctor Availability
 **DELETE** `/doctors/:doctorId/availability/:availabilityId`
 
 **Description:** Remove an availability slot
@@ -408,7 +449,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 14. Get Doctor Appointments
+### 15. Get Doctor Appointments
 **GET** `/doctors/:doctorId/appointments`
 
 **Description:** Retrieve all appointments for a doctor
@@ -452,7 +493,7 @@ Authorization: Bearer <token>
 
 ## Department Management Endpoints
 
-### 15. Get All Departments
+### 16. Get All Departments
 **GET** `/departments`
 
 **Description:** Retrieve all departments
@@ -474,7 +515,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 16. Create Department
+### 17. Create Department
 **POST** `/departments`
 
 **Description:** Create a new department (admin only)
@@ -508,7 +549,7 @@ Authorization: Bearer <token>
 
 ## Medical Records Endpoints
 
-### 17. Get Student Medical Records
+### 18. Get Student Medical Records
 **GET** `/students/:studentId/medical-record`
 
 **Description:** Retrieve student's medical history
@@ -534,7 +575,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 18. Create/Update Medical Record
+### 19. Create/Update Medical Record
 **POST** `/students/:studentId/medical-record`
 
 **Description:** Create or update student medical record
@@ -570,7 +611,7 @@ Authorization: Bearer <token>
 
 ## Consultation Notes Endpoints
 
-### 19. Add Consultation Note
+### 20. Add Consultation Note
 **POST** `/appointments/:appointmentId/consultation-note`
 
 **Description:** Add doctor's consultation notes (after appointment)
@@ -607,7 +648,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 20. Get Consultation Note
+### 21. Get Consultation Note
 **GET** `/appointments/:appointmentId/consultation-note`
 
 **Description:** Retrieve consultation notes for an appointment
@@ -636,7 +677,7 @@ Authorization: Bearer <token>
 
 ## Prescription Endpoints
 
-### 21. Add Prescription
+### 22. Add Prescription
 **POST** `/appointments/:appointmentId/prescriptions`
 
 **Description:** Add prescription for a student
@@ -676,7 +717,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 22. Get Student Prescriptions
+### 23. Get Student Prescriptions
 **GET** `/students/:studentId/prescriptions`
 
 **Description:** Get all prescriptions for a student
@@ -718,7 +759,7 @@ Authorization: Bearer <token>
 
 ## Review & Rating Endpoints
 
-### 23. Add Review
+### 24. Add Review
 **POST** `/appointments/:appointmentId/review`
 
 **Description:** Add review for doctor after appointment completion
@@ -751,7 +792,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 24. Get Doctor Reviews
+### 25. Get Doctor Reviews
 **GET** `/doctors/:doctorId/reviews`
 
 **Description:** Get all reviews for a doctor
@@ -781,7 +822,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 25. Get Student Reviews
+### 26. Get Student Reviews
 **GET** `/students/:studentId/reviews`
 
 **Description:** Get reviews written by a student
@@ -813,7 +854,44 @@ Authorization: Bearer <token>
 
 ## Notification Endpoints
 
-### 26. Get User Notifications
+### 27. Create Notification
+**POST** `/notifications`
+
+**Description:** Create a new notification for a user
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Request Body:**
+```json
+{
+  "userId": 1,
+  "type": "IN_APP",
+  "title": "Appointment Reminder",
+  "message": "Your appointment is scheduled for tomorrow",
+  "appointmentId": 1
+}
+```
+
+**Response (201):**
+```json
+{
+  "id": 1,
+  "userId": 1,
+  "type": "IN_APP",
+  "title": "Appointment Reminder",
+  "message": "Your appointment is scheduled for tomorrow",
+  "status": "PENDING",
+  "appointmentId": 1,
+  "createdAt": "2026-02-15T13:00:00Z"
+}
+```
+
+---
+
+### 28. Get User Notifications
 **GET** `/users/:userId/notifications`
 
 **Description:** Get all notifications for a user
@@ -851,7 +929,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 27. Get Notification Preferences
+### 29. Get Notification Preferences
 **GET** `/users/:userId/notification-preferences`
 
 **Description:** Get user's notification preferences
@@ -876,7 +954,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 28. Update Notification Preferences
+### 30. Update Notification Preferences
 **PUT** `/users/:userId/notification-preferences`
 
 **Description:** Update user's notification settings
@@ -912,7 +990,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 29. Mark Notification as Read
+### 31. Mark Notification as Read
 **PATCH** `/notifications/:notificationId/read`
 
 **Description:** Mark a notification as opened/read
@@ -935,7 +1013,7 @@ Authorization: Bearer <token>
 
 ## Recurring Appointments Endpoints
 
-### 30. Create Recurring Appointment
+### 32. Create Recurring Appointment
 **POST** `/recurring-appointments`
 
 **Description:** Set up recurring appointments
@@ -986,7 +1064,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 31. Get Recurring Appointments
+### 33. Get Recurring Appointments
 **GET** `/students/:studentId/recurring-appointments`
 
 **Description:** Get recurring appointments for a student
@@ -1018,7 +1096,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 32. Update Recurring Appointment
+### 34. Update Recurring Appointment
 **PUT** `/recurring-appointments/:recurringId`
 
 **Description:** Update recurring appointment settings
@@ -1050,7 +1128,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 33. Cancel Recurring Appointment
+### 35. Cancel Recurring Appointment
 **DELETE** `/recurring-appointments/:recurringId`
 
 **Description:** Stop recurring appointments
@@ -1071,7 +1149,7 @@ Authorization: Bearer <token>
 
 ## Holiday & Schedule Endpoints
 
-### 34. Get Department Holidays
+### 36. Get Department Holidays
 **GET** `/departments/:departmentId/holidays`
 
 **Description:** Get holidays for a department
@@ -1094,7 +1172,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 35. Add Department Holiday
+### 37. Add Department Holiday
 **POST** `/departments/:departmentId/holidays`
 
 **Description:** Add holiday/closure for department
@@ -1130,7 +1208,7 @@ Authorization: Bearer <token>
 
 ## File Attachment Endpoints
 
-### 36. Upload Attachment
+### 38. Upload Attachment
 **POST** `/attachments/upload`
 
 **Description:** Upload medical documents or prescriptions
@@ -1165,7 +1243,7 @@ Content-Type: multipart/form-data
 
 ---
 
-### 37. Get Appointment Attachments
+### 39. Get Appointment Attachments
 **GET** `/appointments/:appointmentId/attachments`
 
 **Description:** Get all attachments for an appointment
@@ -1193,7 +1271,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 38. Delete Attachment
+### 40. Delete Attachment
 **DELETE** `/attachments/:attachmentId`
 
 **Description:** Remove an attachment
@@ -1214,7 +1292,7 @@ Authorization: Bearer <token>
 
 ## Audit Log Endpoints
 
-### 39. Get Audit Logs
+### 41. Get Audit Logs
 **GET** `/admin/audit-logs`
 
 **Description:** Get system action history
@@ -1257,7 +1335,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 40. Get User Activity
+### 42. Get User Activity
 **GET** `/admin/users/:userId/activity-log`
 
 **Description:** Get detailed activity log for a specific user
@@ -1289,7 +1367,7 @@ Authorization: Bearer <token>
 
 ## Appointment Endpoints
 
-### 41. Get Available Time Slots
+### 43. Get Available Time Slots
 **GET** `/appointments/available-slots`
 
 **Description:** Get available appointment slots for a doctor on a specific date
@@ -1323,7 +1401,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 42. Create Appointment
+### 44. Create Appointment
 **POST** `/appointments`
 
 **Description:** Book an appointment
@@ -1376,7 +1454,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 43. Get Appointment Details
+### 45. Get Appointment Details
 **GET** `/appointments/:appointmentId`
 
 **Description:** Retrieve full appointment details
@@ -1418,7 +1496,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 44. Update Appointment
+### 46. Update Appointment
 **PUT** `/appointments/:appointmentId`
 
 **Description:** Update appointment details (before scheduled time)
@@ -1448,7 +1526,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 45. Check In Appointment
+### 47. Check In Appointment
 **PATCH** `/appointments/:appointmentId/check-in`
 
 **Description:** Mark student as checked in
@@ -1470,7 +1548,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 46. Complete Appointment
+### 48. Complete Appointment
 **PATCH** `/appointments/:appointmentId/complete`
 
 **Description:** Mark appointment as completed
@@ -1499,7 +1577,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 47. Cancel Appointment
+### 49. Cancel Appointment
 **PATCH** `/appointments/:appointmentId/cancel`
 
 **Description:** Cancel an appointment
@@ -1529,7 +1607,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 48. Mark as No-Show
+### 50. Mark as No-Show
 **PATCH** `/appointments/:appointmentId/no-show`
 
 **Description:** Mark appointment as no-show (student didn't attend)
@@ -1552,7 +1630,7 @@ Authorization: Bearer <token>
 
 ## Doctor Status & Waiting Queue Endpoints
 
-### 49. Get Doctor Current Status
+### 51. Get Doctor Current Status
 **GET** `/doctors/:doctorId/status`
 
 **Description:** Get doctor's current status and waiting queue information
@@ -1578,7 +1656,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 50. Update Doctor Status
+### 52. Update Doctor Status
 **PATCH** `/doctors/:doctorId/status`
 
 **Description:** Update doctor's current status (use by doctor only)
@@ -1610,7 +1688,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 51. Get Doctor Waiting Queue
+### 53. Get Doctor Waiting Queue
 **GET** `/doctors/:doctorId/queue`
 
 **Description:** Get all patients waiting for a specific doctor
@@ -1662,7 +1740,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 52. Add Patient to Waiting Queue
+### 54. Add Patient to Waiting Queue
 **POST** `/doctors/:doctorId/queue`
 
 **Description:** Add a patient to the waiting queue (called when student arrives)
@@ -1700,7 +1778,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 53. Get Appointment Queue Position
+### 55. Get Appointment Queue Position
 **GET** `/appointments/:appointmentId/queue-position`
 
 **Description:** Get student's current position in the waiting queue
@@ -1727,7 +1805,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 54. Mark Patient as Being Served
+### 56. Mark Patient as Being Served
 **PATCH** `/doctors/:doctorId/queue/:queueId/serve`
 
 **Description:** Mark patient as being served (doctor calls next patient)
@@ -1752,7 +1830,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 55. Get Queue Statistics
+### 57. Get Queue Statistics
 **GET** `/doctors/:doctorId/queue-stats`
 
 **Description:** Get queue statistics for a doctor
@@ -1783,7 +1861,7 @@ Authorization: Bearer <token>
 
 ## Admin Endpoints
 
-### 56. Get All Appointments
+### 58. Get All Appointments
 **GET** `/admin/appointments`
 
 **Description:** Retrieve all appointments in the system
@@ -1827,7 +1905,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 57. Get Dashboard Statistics
+### 59. Get Dashboard Statistics
 **GET** `/admin/statistics`
 
 **Description:** Get system-wide statistics
@@ -1881,7 +1959,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 58. Get All Users
+### 60. Get All Users
 **GET** `/admin/users`
 
 **Description:** Retrieve all users with filters
@@ -1916,7 +1994,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 59. Delete User
+### 61. Delete User
 **DELETE** `/admin/users/:userId`
 
 **Description:** Remove a user from the system
@@ -1935,7 +2013,7 @@ Authorization: Bearer <token>
 
 ---
 
-### 60. Get User Activity Log
+### 62. Get User Activity Log
 **GET** `/admin/users/:userId/activity`
 
 **Description:** Get activity history for a specific user
@@ -2052,60 +2130,62 @@ X-RateLimit-Reset: 1613067600
 | 5 | `/students/:id` | GET | Get student profile |
 | 6 | `/students/:id` | PUT | Update student profile |
 | 7 | `/students/:id/appointments` | GET | Get student appointments |
-| 8 | `/doctors` | GET | List all doctors |
-| 9 | `/doctors/:id` | GET | Get doctor details |
-| 10 | `/doctors/:id/availability` | POST | Add availability |
-| 11 | `/doctors/:id/availability` | GET | Get availability |
-| 12 | `/doctors/:id/availability/:availId` | PUT | Update availability |
-| 13 | `/doctors/:id/availability/:availId` | DELETE | Delete availability |
-| 14 | `/doctors/:id/appointments` | GET | Get doctor appointments |
-| 15 | `/departments` | GET | Get all departments |
-| 16 | `/departments` | POST | Create department |
-| 17 | `/students/:id/medical-record` | GET | Get medical records |
-| 18 | `/students/:id/medical-record` | POST | Create/update medical record |
-| 19 | `/appointments/:id/consultation-note` | POST | Add consultation note |
-| 20 | `/appointments/:id/consultation-note` | GET | Get consultation note |
-| 21 | `/appointments/:id/prescriptions` | POST | Add prescription |
-| 22 | `/students/:id/prescriptions` | GET | Get prescriptions |
-| 23 | `/appointments/:id/review` | POST | Add review |
-| 24 | `/doctors/:id/reviews` | GET | Get doctor reviews |
-| 25 | `/students/:id/reviews` | GET | Get student reviews |
-| 26 | `/users/:id/notifications` | GET | Get notifications |
-| 27 | `/users/:id/notification-preferences` | GET | Get notification preferences |
-| 28 | `/users/:id/notification-preferences` | PUT | Update notification preferences |
-| 29 | `/notifications/:id/read` | PATCH | Mark notification as read |
-| 30 | `/recurring-appointments` | POST | Create recurring appointment |
-| 31 | `/students/:id/recurring-appointments` | GET | Get recurring appointments |
-| 32 | `/recurring-appointments/:id` | PUT | Update recurring appointment |
-| 33 | `/recurring-appointments/:id` | DELETE | Cancel recurring appointment |
-| 34 | `/departments/:id/holidays` | GET | Get department holidays |
-| 35 | `/departments/:id/holidays` | POST | Add department holiday |
-| 36 | `/attachments/upload` | POST | Upload attachment |
-| 37 | `/appointments/:id/attachments` | GET | Get appointment attachments |
-| 38 | `/attachments/:id` | DELETE | Delete attachment |
-| 39 | `/admin/audit-logs` | GET | Get audit logs |
-| 40 | `/admin/users/:id/activity-log` | GET | Get user activity log |
-| 41 | `/appointments/available-slots` | GET | Get available slots |
-| 42 | `/appointments` | POST | Book appointment |
-| 43 | `/appointments/:id` | GET | Get appointment details |
-| 44 | `/appointments/:id` | PUT | Update appointment |
-| 45 | `/appointments/:id/check-in` | PATCH | Check in patient |
-| 46 | `/appointments/:id/complete` | PATCH | Complete appointment |
-| 47 | `/appointments/:id/cancel` | PATCH | Cancel appointment |
-| 48 | `/appointments/:id/no-show` | PATCH | Mark as no-show |
-| 49 | `/doctors/:id/status` | GET | Get doctor current status |
-| 50 | `/doctors/:id/status` | PATCH | Update doctor status |
-| 51 | `/doctors/:id/queue` | GET | Get doctor waiting queue |
-| 52 | `/doctors/:id/queue` | POST | Add patient to queue |
-| 53 | `/appointments/:id/queue-position` | GET | Get queue position |
-| 54 | `/doctors/:id/queue/:queueId/serve` | PATCH | Mark patient being served |
-| 55 | `/doctors/:id/queue-stats` | GET | Get queue statistics |
-| 56 | `/admin/appointments` | GET | Get all appointments |
-| 57 | `/admin/statistics` | GET | Get dashboard stats |
-| 58 | `/admin/users` | GET | Get all users |
-| 59 | `/admin/users/:id` | DELETE | Delete user |
-| 60 | `/admin/users/:id/activity` | GET | Get user activity |
+| 8 | `/doctors` | POST | Create doctor profile |
+| 9 | `/doctors` | GET | List all doctors |
+| 10 | `/doctors/:id` | GET | Get doctor details |
+| 11 | `/doctors/:id/availability` | POST | Add availability |
+| 12 | `/doctors/:id/availability` | GET | Get availability |
+| 13 | `/doctors/:id/availability/:availId` | PUT | Update availability |
+| 14 | `/doctors/:id/availability/:availId` | DELETE | Delete availability |
+| 15 | `/doctors/:id/appointments` | GET | Get doctor appointments |
+| 16 | `/departments` | GET | Get all departments |
+| 17 | `/departments` | POST | Create department |
+| 18 | `/students/:id/medical-record` | GET | Get medical records |
+| 19 | `/students/:id/medical-record` | POST | Create/update medical record |
+| 20 | `/appointments/:id/consultation-note` | POST | Add consultation note |
+| 21 | `/appointments/:id/consultation-note` | GET | Get consultation note |
+| 22 | `/appointments/:id/prescriptions` | POST | Add prescription |
+| 23 | `/students/:id/prescriptions` | GET | Get prescriptions |
+| 24 | `/appointments/:id/review` | POST | Add review |
+| 25 | `/doctors/:id/reviews` | GET | Get doctor reviews |
+| 26 | `/students/:id/reviews` | GET | Get student reviews |
+| 27 | `/notifications` | POST | Create notification |
+| 28 | `/users/:id/notifications` | GET | Get notifications |
+| 29 | `/users/:id/notification-preferences` | GET | Get notification preferences |
+| 30 | `/users/:id/notification-preferences` | PUT | Update notification preferences |
+| 31 | `/notifications/:id/read` | PATCH | Mark notification as read |
+| 32 | `/recurring-appointments` | POST | Create recurring appointment |
+| 33 | `/students/:id/recurring-appointments` | GET | Get recurring appointments |
+| 34 | `/recurring-appointments/:id` | PUT | Update recurring appointment |
+| 35 | `/recurring-appointments/:id` | DELETE | Cancel recurring appointment |
+| 36 | `/departments/:id/holidays` | GET | Get department holidays |
+| 37 | `/departments/:id/holidays` | POST | Add department holiday |
+| 38 | `/attachments/upload` | POST | Upload attachment |
+| 39 | `/appointments/:id/attachments` | GET | Get appointment attachments |
+| 40 | `/attachments/:id` | DELETE | Delete attachment |
+| 41 | `/admin/audit-logs` | GET | Get audit logs |
+| 42 | `/admin/users/:id/activity-log` | GET | Get user activity log |
+| 43 | `/appointments/available-slots` | GET | Get available slots |
+| 44 | `/appointments` | POST | Book appointment |
+| 45 | `/appointments/:id` | GET | Get appointment details |
+| 46 | `/appointments/:id` | PUT | Update appointment |
+| 47 | `/appointments/:id/check-in` | PATCH | Check in patient |
+| 48 | `/appointments/:id/complete` | PATCH | Complete appointment |
+| 49 | `/appointments/:id/cancel` | PATCH | Cancel appointment |
+| 50 | `/appointments/:id/no-show` | PATCH | Mark as no-show |
+| 51 | `/doctors/:id/status` | GET | Get doctor current status |
+| 52 | `/doctors/:id/status` | PATCH | Update doctor status |
+| 53 | `/doctors/:id/queue` | GET | Get doctor waiting queue |
+| 54 | `/doctors/:id/queue` | POST | Add patient to queue |
+| 55 | `/appointments/:id/queue-position` | GET | Get queue position |
+| 56 | `/doctors/:id/queue/:queueId/serve` | PATCH | Mark patient being served |
+| 57 | `/doctors/:id/queue-stats` | GET | Get queue statistics |
+| 58 | `/admin/appointments` | GET | Get all appointments |
+| 59 | `/admin/statistics` | GET | Get dashboard stats |
+| 60 | `/admin/users` | GET | Get all users |
+| 61 | `/admin/users/:id` | DELETE | Delete user |
+| 62 | `/admin/users/:id/activity` | GET | Get user activity |
 
-**Total Endpoints: 60**
+**Total Endpoints: 62**
 
 ---
