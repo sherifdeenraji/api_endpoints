@@ -1,2191 +1,526 @@
-# Doctor Appointment Scheduling System - API Endpoints
+# Beta Health Care — Focused API Endpoints
 
-## Base URL
+## Purpose and scope
+
+This is the implementation guide for the current Beta Health Care API focus:
+
+- user accounts and student/doctor profile management;
+- JWT authentication;
+- doctor availability and bookable time slots;
+- appointment scheduling and lifecycle management;
+- appointment-backed reviews;
+- user notifications and notification preferences; and
+- doctor-managed recurring appointments that students can only view.
+
+The following areas are deliberately **out of scope** for this phase: medical records, consultation notes, prescriptions, department holidays, waiting queues, departments, staff management, dashboard analytics, and audit logs.
+
+Base path: `/api`
+
+All identifiers are MongoDB ObjectIds. All timestamps are ISO 8601 UTC timestamps. Date-only values use `YYYY-MM-DD`; recurring schedule times use the clinic time zone `Africa/Lagos` (WAT, UTC+01:00).
+
+## Roles and access conventions
+
+| Role | Meaning in this document |
+| --- | --- |
+| `ADMIN` | Creates, activates/deactivates, and views user accounts and their profiles. |
+| `STUDENT` | Manages only their own profile and appointments; may view only their own recurring schedules. |
+| `DOCTOR` | Manages only their own profile, availability, appointments, and recurring schedules. |
+
+Unless an endpoint is explicitly public, send `Authorization: Bearer <accessToken>`.
+
+`/me` always resolves from the JWT; callers must never submit their own `userId`, `studentId`, or `doctorId` to impersonate someone else.
+
+## Common response conventions
+
+Successful list endpoints return:
+
+```json
+{
+  "data": [],
+  "pagination": { "page": 1, "limit": 20, "total": 0 }
+}
 ```
-http://localhost:3000/api
+
+Errors return:
+
+```json
+{
+  "error": "CONFLICT",
+  "message": "The selected time slot is no longer available.",
+  "details": {}
+}
+```
+
+Use `400` for invalid input, `401` for missing/invalid authentication, `403` for an authenticated caller without access, `404` for an inaccessible or missing resource, and `409` for uniqueness, booking, or state-transition conflicts.
+
+---
+
+## 1. Authentication
+
+Public registration is not provided. As stated in the project README, an administrator creates accounts and distributes temporary credentials.
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/auth/login` | Public | Authenticate an existing user. |
+| `POST` | `/auth/logout` | Authenticated | End the current server-tracked session, if token/session revocation is enabled. |
+
+### `POST /auth/login`
+
+Request body:
+
+```json
+{ "email": "student@example.edu", "password": "password" }
+```
+
+Response `200`:
+
+```json
+{
+  "token": "<jwt>",
+  "user": { "id": "…", "email": "student@example.edu", "role": "STUDENT", "isActive": true }
+}
 ```
 
 ---
 
-## Authentication Endpoints
+## 2. User, student, and doctor management
 
-### 1. Register User
-**POST** `/auth/register`
+### Administrative account management
 
-**Description:** Create a new user account
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/admin/users` | `ADMIN` | Create a user account only. |
+| `GET` | `/admin/users` | `ADMIN` | List users; filters: `role`, `isActive`, `search`, `page`, `limit`. |
+| `GET` | `/admin/users/:userId` | `ADMIN` | Get a user and their linked profile. |
+| `PATCH` | `/admin/users/:userId` | `ADMIN` | Change account state or reset a temporary password. |
 
-**Request Body:**
+`POST /admin/users` creates the account only. It accepts `email`, `role`, and an initial password; it does not accept a Student or Doctor profile. Email belongs to `User` only and must not be duplicated in Student/Doctor collections. The password is received over HTTPS, hashed before storage, and never returned in a response.
+
 ```json
 {
-  "name": "John Doe",
-  "email": "john@example.com",
-  "password": "hashedPassword123",
-  "role": "STUDENT"
-}
-```
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "name": "John Doe",
-  "email": "john@example.com",
+  "email": "ada@example.edu",
   "role": "STUDENT",
-  "createdAt": "2026-02-11T10:00:00Z"
+  "password": "initial-temporary-password"
 }
 ```
+
+`PATCH /admin/users/:userId` may change `isActive` and reset the password. It must not change a user’s role after creation; role changes would break profile and appointment ownership. Deactivation is used instead of deleting a user with clinical scheduling history.
+
+### Student profiles
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/students` | `STUDENT` | Create the caller’s student profile once. |
+| `GET` | `/students/me` | `STUDENT` | Get the caller’s student profile. |
+| `PATCH` | `/students/me` | `STUDENT` | Update permitted contact/profile fields. |
+| `GET` | `/students/:studentId` | `ADMIN`, assigned `DOCTOR` | Get a student profile. A doctor needs an appointment with that student. |
+
+The student profile is linked to the caller’s account from the JWT; `userId` is never submitted in the request. Students may update `phoneNumber`, `address`, and `emergencyContact`; administrators control `studentNumber` and the linked account.
+
+### Doctor profiles
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- |
+| `POST` | `/doctors` | `DOCTOR` | Create the caller’s doctor profile once. |
+| `GET` | `/doctors` | Authenticated | List active doctors; filters: `specialization`, `page`, `limit`. |
+| `GET` | `/doctors/me` | `DOCTOR` | Get the caller’s full doctor profile. |
+| `PATCH` | `/doctors/me` | `DOCTOR` | Update permitted professional/profile fields. |
+| `GET` | `/doctors/:doctorId` | Authenticated | Get a public doctor profile. |
+
+The doctor profile is linked to the caller’s account from the JWT; `userId` is never submitted in the request. Doctors cannot alter `licenseNumber`; administrators must handle corrections through the user-management process.
 
 ---
 
-### 2. Login User
-**POST** `/auth/login`
+## 3. Doctor availability and bookable slots
 
-**Description:** Authenticate user and return JWT token
+Availability is a doctor-owned weekly schedule. A slot has `dayOfWeek`, `startTime`, `endTime`, `slotDurationMinutes`, and `isActive`.
 
-**Request Body:**
-```json
-{
-  "email": "john@example.com",
-  "password": "hashedPassword123"
-}
-```
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/doctors/:doctorId/availability` | Authenticated | View a doctor’s weekly availability. |
+| `POST` | `/doctors/me/availability` | `DOCTOR` | Add one availability window. |
+| `PATCH` | `/doctors/me/availability/:availabilityId` | owning `DOCTOR` | Edit one availability window. |
+| `DELETE` | `/doctors/me/availability/:availabilityId` | owning `DOCTOR` | Remove one availability window. |
+| `GET` | `/doctors/:doctorId/available-slots` | Authenticated | Calculate open slots for a date. Required query: `date`; optional: `durationMinutes`. |
 
-**Response (200):**
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "id": 1,
-    "email": "john@example.com",
-    "role": "STUDENT"
-  }
-}
-```
+Example creation body:
 
----
-
-### 3. Logout User
-**POST** `/auth/logout`
-
-**Description:** Invalidate user session/token
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "message": "Logged out successfully"
-}
-```
-
----
-
-## Student Endpoints
-
-### 4. Create Student Profile
-**POST** `/students`
-
-**Description:** Create a student profile linked to user account
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "userId": 1,
-  "studentNumber": "STU2026001",
-  "fullName": "John Doe",
-  "phoneNumber": "+1234567890",
-  "email": "john@example.com",
-  "dateOfBirth": "2005-03-15",
-  "emergencyContact": "Jane Doe",
-  "emergencyPhone": "+0987654321",
-  "address": "123 Main St, City, State"
-}
-```
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "userId": 1,
-  "studentNumber": "STU2026001",
-  "fullName": "John Doe",
-  "createdAt": "2026-02-11T10:00:00Z"
-}
-```
-
----
-
-### 5. Get Student Profile
-**GET** `/students/:studentId`
-
-**Description:** Retrieve student profile information
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "userId": 1,
-  "studentNumber": "STU2026001",
-  "fullName": "John Doe",
-  "phoneNumber": "+1234567890",
-  "email": "john@example.com",
-  "dateOfBirth": "2005-03-15",
-  "emergencyContact": "Jane Doe",
-  "emergencyPhone": "+0987654321",
-  "address": "123 Main St, City, State",
-  "createdAt": "2026-02-11T10:00:00Z",
-  "updatedAt": "2026-02-11T10:00:00Z"
-}
-```
-
----
-
-### 6. Update Student Profile
-**PUT** `/students/:studentId`
-
-**Description:** Update student profile information
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "fullName": "John Updated",
-  "phoneNumber": "+1234567890",
-  "emergencyContact": "Jane Doe",
-  "emergencyPhone": "+0987654321",
-  "address": "456 Oak Ave, City, State"
-}
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "studentNumber": "STU2026001",
-  "fullName": "John Updated",
-  "updatedAt": "2026-02-11T11:00:00Z"
-}
-```
-
----
-
-### 7. Get Student Appointments
-**GET** `/students/:studentId/appointments`
-
-**Description:** Retrieve all appointments for a student
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Query Parameters:**
-- `status` (optional): Filter by status (BOOKED, CANCELLED, COMPLETED, NO_SHOW, CHECKED_IN)
-- `page` (optional): Page number (default: 1)
-- `limit` (optional): Results per page (default: 10)
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "studentId": 1,
-      "doctorId": 5,
-      "scheduledAt": "2026-02-15T14:00:00Z",
-      "durationMinutes": 30,
-      "reason": "General Checkup",
-      "status": "BOOKED",
-      "createdAt": "2026-02-11T10:00:00Z",
-      "doctor": {
-        "id": 5,
-        "fullName": "Dr. Smith",
-        "specialization": "General Medicine"
-      }
-    }
-  ],
-  "total": 5,
-  "page": 1,
-  "limit": 10
-}
-```
-
----
-
-## Doctor Endpoints
-
-### 8. Create Doctor Profile
-**POST** `/doctors`
-
-**Description:** Create a doctor profile linked to user account
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "name": "Dr. James Smith",
-  "departmentId": "507f1f77bcf86cd799439011",
-  "specialization": "General Medicine",
-  "phoneNumber": "+1111111111",
-  "bio": "Experienced physician with 10+ years of practice",
-  "qualifications": "MD, Board Certified",
-  "licenseNumber": "LIC123456"
-}
-```
-
-**Response (201):**
-```json
-{
-  "id": 5,
-  "userId": 2,
-  "name": "Dr. James Smith",
-  "departmentId": "507f1f77bcf86cd799439011",
-  "specialization": "General Medicine",
-  "phoneNumber": "+1111111111",
-  "bio": "Experienced physician with 10+ years of practice",
-  "qualifications": "MD, Board Certified",
-  "licenseNumber": "LIC123456",
-  "createdAt": "2026-02-11T10:00:00Z"
-}
-```
-
----
-
-### 9. Get All Doctors
-**GET** `/doctors`
-
-**Description:** Retrieve list of all doctors with filters
-
-**Query Parameters:**
-- `specialization` (optional): Filter by specialization
-- `isAvailable` (optional): Filter by availability status
-- `page` (optional): Page number (default: 1)
-- `limit` (optional): Results per page (default: 10)
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 5,
-      "fullName": "Dr. James Smith",
-      "specialization": "General Medicine",
-      "phoneNumber": "+1111111111",
-      "bio": "Experienced physician with 10+ years",
-      "qualifications": "MD, Board Certified",
-      "rating": 4.8,
-      "isAvailable": true,
-      "createdAt": "2026-01-01T10:00:00Z"
-    }
-  ],
-  "total": 15,
-  "page": 1,
-  "limit": 10
-}
-```
-
----
-
-### 10. Get Doctor Profile
-**GET** `/doctors/:doctorId`
-
-**Description:** Retrieve detailed doctor profile
-
-**Response (200):**
-```json
-{
-  "id": 5,
-  "userId": 2,
-  "fullName": "Dr. James Smith",
-  "specialization": "General Medicine",
-  "phoneNumber": "+1111111111",
-  "bio": "Experienced physician with 10+ years of practice",
-  "qualifications": "MD, Board Certified",
-  "licenseNumber": "LIC123456",
-  "rating": 4.8,
-  "isAvailable": true,
-  "createdAt": "2026-01-01T10:00:00Z"
-}
-```
-
----
-
-### 11. Create Doctor Availability
-**POST** `/doctors/:doctorId/availability`
-
-**Description:** Add available time slots for a doctor
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
 ```json
 {
   "dayOfWeek": "MONDAY",
   "startTime": "09:00",
   "endTime": "17:00",
+  "slotDurationMinutes": 30,
   "isActive": true
 }
 ```
 
-**Response (201):**
+Availability windows for the same doctor must not overlap. Changes that would make an existing future appointment invalid must return `409`; the doctor must first reschedule or cancel the affected appointments.
+
+---
+
+## 4. Appointments
+
+### Appointment model and lifecycle
+
+An appointment stores `studentId`, `doctorId`, `scheduledAt`, `durationMinutes`, `type`, `priority`, `reason`, optional `notes`, `status`, and optional `recurringAppointmentId`.
+
+Allowed status values and transitions:
+
+```text
+BOOKED → CHECKED_IN → COMPLETED
+BOOKED → CANCELLED
+BOOKED → NO_SHOW
+CHECKED_IN → CANCELLED (doctor/admin only, exceptional case)
+```
+
+This phase supports normal scheduled bookings only: `type` is always `BOOKING` and `priority` is always `0`. The server sets these values; it does not accept a client-provided priority.
+
+### Endpoints
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/appointments` | `STUDENT`, `DOCTOR` | Create a one-off appointment. A student creates only for themself; a doctor may create for a student. |
+| `GET` | `/appointments` | `STUDENT`, `DOCTOR`, `ADMIN` | List appointments within the caller’s scope. Filters: `status`, `from`, `to`, `studentId`, `doctorId`, `page`, `limit`. |
+| `GET` | `/appointments/:appointmentId` | participant or `ADMIN` | Get appointment details. |
+| `PATCH` | `/appointments/:appointmentId` | participant or `ADMIN` | Reschedule/update mutable details while the appointment is `BOOKED`. |
+| `PATCH` | `/appointments/:appointmentId/check-in` | participant or `DOCTOR` | Mark the appointment checked in. |
+| `PATCH` | `/appointments/:appointmentId/complete` | assigned `DOCTOR` | Mark it completed. |
+| `PATCH` | `/appointments/:appointmentId/cancel` | participant or `ADMIN` | Cancel a future booked appointment. |
+| `PATCH` | `/appointments/:appointmentId/no-show` | assigned `DOCTOR` | Mark a booked appointment as no-show. |
+
+Student request example:
+
 ```json
 {
-  "id": 1,
-  "doctorId": 5,
-  "dayOfWeek": "MONDAY",
-  "startTime": "09:00",
-  "endTime": "17:00",
+  "doctorId": "…",
+  "scheduledAt": "2026-08-10T09:00:00.000Z",
+  "durationMinutes": 30,
+  "type": "BOOKING",
+  "reason": "General checkup"
+}
+```
+
+Doctors creating for a student additionally provide `studentId`. Every create/reschedule is checked against active availability and existing overlapping appointments for the doctor. A student may not hold overlapping active appointments; appointments in `CANCELLED`, `COMPLETED`, and `NO_SHOW` do not block a new booking.
+
+---
+
+## 5. Recurring appointments
+
+A recurring appointment is a doctor-owned scheduling instruction, not a single appointment. It has `doctorId`, `studentId`, `frequency` (`WEEKLY` or `MONTHLY`), `dayOfWeek` or `dayOfMonth`, `startTime`, `durationMinutes`, `startDate`, `endDate`, `isActive`, and `nextOccurrenceAt`.
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/doctors/me/recurring-appointments` | `DOCTOR` | Create a recurring schedule for a student. |
+| `GET` | `/doctors/me/recurring-appointments` | `DOCTOR` | List the caller’s recurring schedules. |
+| `PATCH` | `/doctors/me/recurring-appointments/:recurringAppointmentId` | owning `DOCTOR` | Edit or pause a schedule. |
+| `DELETE` | `/doctors/me/recurring-appointments/:recurringAppointmentId` | owning `DOCTOR` | Cancel a schedule and prevent future generation. |
+| `GET` | `/students/me/recurring-appointments` | `STUDENT` | View only the caller’s recurring schedules. |
+| `GET` | `/students/me/recurring-appointments/:recurringAppointmentId` | `STUDENT` | View one of the caller’s schedules. |
+
+Students have no create, update, pause, or delete route for recurring schedules.
+
+When a doctor creates or changes a schedule, the server validates the recurrence against availability and conflicts before saving. A background job creates each child appointment inside a rolling booking horizon (for example, 90 days). Each child stores `recurringAppointmentId`; a unique index on `(recurringAppointmentId, scheduledAt)` prevents duplicate generation. If a future occurrence becomes unavailable, it is recorded as a skipped occurrence and the doctor is notified rather than silently double-booking it.
+
+---
+
+## 6. Reviews
+
+Only the student in a **completed** appointment may create its review. There is exactly one review per appointment; the review stores `appointmentId`, `studentId`, `doctorId`, `rating` (1–5), `comment`, and timestamps.
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/appointments/:appointmentId/review` | appointment `STUDENT` | Create the appointment’s review after completion. |
+| `GET` | `/doctors/:doctorId/reviews` | Authenticated | List doctor reviews; filters: `page`, `limit`. |
+| `GET` | `/students/me/reviews` | `STUDENT` | List the caller’s own reviews. |
+
+The server must reject a review with `409` unless the appointment is `COMPLETED`, belongs to the caller, and has no existing review. Doctor rating aggregates are computed from reviews (or maintained transactionally), never accepted from the client.
+
+---
+
+## 7. Notifications
+
+Notifications are created internally by system events: account creation, appointment creation/reschedule/cancellation/status changes, recurring-schedule changes, and review availability. Clients do not receive a public endpoint to create arbitrary notifications.
+
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/notifications/me` | Authenticated | List the caller’s notifications; filters: `unreadOnly`, `type`, `page`, `limit`. |
+| `PATCH` | `/notifications/:notificationId/read` | notification owner | Mark one notification as read. |
+| `PATCH` | `/notifications/me/read-all` | Authenticated | Mark all of the caller’s notifications as read. |
+| `GET` | `/notification-preferences/me` | Authenticated | Get notification preferences. |
+| `PATCH` | `/notification-preferences/me` | Authenticated | Update channel preferences. |
+
+Preference example:
+
+```json
+{
+  "inApp": true,
+  "email": true,
+  "appointmentReminders": true,
+  "recurringAppointmentUpdates": true
+}
+```
+
+Notification preferences control delivery channels, not the creation of critical in-app audit notifications.
+
+---
+
+## 8. Request and response examples
+
+The following objects are the canonical shapes for the endpoints above. Read endpoints return `200`; creation endpoints return `201` unless stated otherwise.
+
+### Account management
+
+`POST /admin/users` request:
+
+```json
+{
+  "email": "ada@example.edu",
+  "role": "STUDENT",
+  "password": "initial-temporary-password"
+}
+```
+
+Response:
+
+```json
+{
+  "id": "userId",
+  "email": "ada@example.edu",
+  "role": "STUDENT",
   "isActive": true,
-  "createdAt": "2026-02-11T10:00:00Z"
+  "createdAt": "2026-07-15T10:00:00.000Z"
 }
 ```
 
----
+`GET /admin/users` response:
 
-### 12. Get Doctor Availability
-**GET** `/doctors/:doctorId/availability`
-
-**Description:** Retrieve all availability slots for a doctor
-
-**Response (200):**
 ```json
 {
-  "data": [
-    {
-      "id": 1,
-      "doctorId": 5,
-      "dayOfWeek": "MONDAY",
-      "startTime": "09:00",
-      "endTime": "17:00",
-      "isActive": true
-    },
-    {
-      "id": 2,
-      "doctorId": 5,
-      "dayOfWeek": "TUESDAY",
-      "startTime": "10:00",
-      "endTime": "18:00",
-      "isActive": true
-    }
-  ]
+  "data": [{ "id": "userId", "email": "ada@example.edu", "role": "STUDENT", "isActive": true, "profile": { "fullName": "Ada Okafor" } }],
+  "pagination": { "page": 1, "limit": 20, "total": 1 }
 }
 ```
 
----
+`PATCH /admin/users/:userId` request and response:
 
-### 13. Update Doctor Availability
-**PUT** `/doctors/:doctorId/availability/:availabilityId`
-
-**Description:** Update an availability slot
-
-**Headers:**
-```
-Authorization: Bearer <token>
+```json
+{ "isActive": false }
 ```
 
-**Request Body:**
+```json
+{ "id": "userId", "email": "ada@example.edu", "role": "STUDENT", "isActive": false, "updatedAt": "2026-07-15T11:00:00.000Z" }
+```
+
+### Profiles
+
+`POST /students` request:
+
 ```json
 {
-  "startTime": "09:30",
-  "endTime": "17:30",
-  "isActive": true
+  "fullName": "Ada Okafor",
+  "studentNumber": "MSE/2001/024",
+  "phoneNumber": "+2348045678906",
+  "dateOfBirth": "2005-03-15",
+  "emergencyContact": { "name": "Garuba Abdusalam", "phoneNumber": "+2347065432188" },
+  "address": "Asherifa Estate, Modakeke"
 }
 ```
 
-**Response (200):**
+Response `201`:
+
+```json
+{ "id": "studentId", "userId": "userId", "studentNumber": "MSE/2001/024", "fullName": "Ada Okafor", "email": "ada@example.edu", "phoneNumber": "+2348045678906" }
+```
+
+`PATCH /students/me` request:
+
 ```json
 {
-  "id": 1,
-  "doctorId": 5,
-  "dayOfWeek": "MONDAY",
-  "startTime": "09:30",
-  "endTime": "17:30",
-  "isActive": true
+  "phoneNumber": "+2348045678910",
+  "emergencyContact": { "name": "Garuba Abdusalam", "phoneNumber": "+2347065432188" },
+  "address": "New address"
 }
 ```
 
----
+`GET /students/me`, `GET /students/:studentId`, and a successful student update response:
 
-### 14. Delete Doctor Availability
-**DELETE** `/doctors/:doctorId/availability/:availabilityId`
-
-**Description:** Remove an availability slot
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
 ```json
 {
-  "message": "Availability deleted successfully"
+  "id": "studentId",
+  "userId": "userId",
+  "studentNumber": "MSE/2001/024",
+  "fullName": "Ada Okafor",
+  "email": "ada@example.edu",
+  "phoneNumber": "+2348045678910",
+  "emergencyContact": { "name": "Garuba Abdusalam", "phoneNumber": "+2347065432188" },
+  "address": "New address"
 }
 ```
 
----
+`PATCH /doctors/me` request:
 
-### 15. Get Doctor Appointments
-**GET** `/doctors/:doctorId/appointments`
-
-**Description:** Retrieve all appointments for a doctor
-
-**Headers:**
-```
-Authorization: Bearer <token>
+```json
+{ "phoneNumber": "+2348000000000", "bio": "General practitioner", "qualifications": "MBBS" }
 ```
 
-**Query Parameters:**
-- `status` (optional): Filter by status
-- `date` (optional): Filter by specific date (YYYY-MM-DD)
-- `page` (optional): Page number
-- `limit` (optional): Results per page
+`POST /doctors` request:
 
-**Response (200):**
+```json
+{ "fullName": "Dr. James Smith", "specialization": "General Medicine", "phoneNumber": "+2348000000000", "qualifications": "MBBS", "licenseNumber": "LIC123456", "bio": "General practitioner" }
+```
+
+`POST /doctors` returns `201`; `GET /doctors/me`, `GET /doctors/:doctorId`, and a successful doctor update return `200`, using this object:
+
+```json
+{ "id": "doctorId", "fullName": "Dr. James Smith", "specialization": "General Medicine", "phoneNumber": "+2348000000000", "qualifications": "MBBS", "bio": "General practitioner", "rating": 4.8 }
+```
+
+`GET /doctors` response:
+
 ```json
 {
-  "data": [
-    {
-      "id": 1,
-      "studentId": 1,
-      "doctorId": 5,
-      "scheduledAt": "2026-02-15T14:00:00Z",
-      "durationMinutes": 30,
-      "reason": "General Checkup",
-      "status": "BOOKED",
-      "student": {
-        "id": 1,
-        "fullName": "John Doe",
-        "studentNumber": "STU2026001"
-      }
-    }
-  ],
-  "total": 8,
-  "page": 1
+  "data": [{ "id": "doctorId", "fullName": "Dr. James Smith", "specialization": "General Medicine", "rating": 4.8 }],
+  "pagination": { "page": 1, "limit": 20, "total": 1 }
 }
 ```
 
----
+### Availability
 
-## Department Management Endpoints
+`POST /doctors/me/availability` request and response:
 
-### 16. Get All Departments
-**GET** `/departments`
+```json
+{ "dayOfWeek": "MONDAY", "startTime": "09:00", "endTime": "17:00", "slotDurationMinutes": 30, "isActive": true }
+```
 
-**Description:** Retrieve all departments
+```json
+{ "id": "availabilityId", "doctorId": "doctorId", "dayOfWeek": "MONDAY", "startTime": "09:00", "endTime": "17:00", "slotDurationMinutes": 30, "isActive": true }
+```
 
-**Response (200):**
+`PATCH /doctors/me/availability/:availabilityId` request:
+
+```json
+{ "startTime": "10:00", "endTime": "16:00", "isActive": true }
+```
+
+It returns the updated availability object. `DELETE /doctors/me/availability/:availabilityId` returns `204` without a body.
+
+`GET /doctors/:doctorId/availability` response:
+
+```json
+{ "data": [{ "id": "availabilityId", "dayOfWeek": "MONDAY", "startTime": "09:00", "endTime": "17:00", "slotDurationMinutes": 30, "isActive": true }] }
+```
+
+`GET /doctors/:doctorId/available-slots?date=2026-08-10&durationMinutes=30` response:
+
+```json
+{ "doctorId": "doctorId", "date": "2026-08-10", "slots": [{ "start": "2026-08-10T09:00:00.000Z", "end": "2026-08-10T09:30:00.000Z" }] }
+```
+
+### Appointments
+
+`POST /appointments` request from a student:
+
+```json
+{ "doctorId": "doctorId", "scheduledAt": "2026-08-10T09:00:00.000Z", "durationMinutes": 30, "type": "BOOKING", "reason": "General checkup" }
+```
+
+A doctor creating for a student includes `studentId`. Create response, single appointment response, and successful status/action response:
+
 ```json
 {
-  "data": [
-    {
-      "id": 1,
-      "name": "General Medicine",
-      "description": "General medical services",
-      "location": "Building A, Floor 2",
-      "phoneNumber": "+1234567890"
-    }
-  ]
-}
-```
-
----
-
-### 17. Create Department
-**POST** `/departments`
-
-**Description:** Create a new department (admin only)
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "name": "Cardiology",
-  "description": "Heart and cardiovascular services",
-  "location": "Building B, Floor 3",
-  "phoneNumber": "+1234567890"
-}
-```
-
-**Response (201):**
-```json
-{
-  "id": 2,
-  "name": "Cardiology",
-  "description": "Heart and cardiovascular services",
-  "location": "Building B, Floor 3"
-}
-```
-
----
-
-## Medical Records Endpoints
-
-### 18. Get Student Medical Records
-**GET** `/students/:studentId/medical-record`
-
-**Description:** Retrieve student's medical history
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "studentId": 1,
-  "bloodType": "O_POSITIVE",
-  "allergies": "Penicillin, Shellfish",
-  "chronicConditions": "Asthma, Hypertension",
-  "currentMedications": "Albuterol inhaler, Lisinopril",
-  "medicalHistory": "Previous appendectomy in 2020",
-  "lastUpdated": "2026-02-10T10:00:00Z"
-}
-```
-
----
-
-### 19. Create/Update Medical Record
-**POST** `/students/:studentId/medical-record`
-
-**Description:** Create or update student medical record
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "bloodType": "O_POSITIVE",
-  "allergies": "Penicillin, Shellfish",
-  "chronicConditions": "Asthma",
-  "currentMedications": "Albuterol inhaler",
-  "medicalHistory": "Appendectomy in 2020"
-}
-```
-
-**Response (201/200):**
-```json
-{
-  "id": 1,
-  "studentId": 1,
-  "bloodType": "O_POSITIVE",
-  "allergies": "Penicillin, Shellfish",
-  "lastUpdated": "2026-02-11T10:00:00Z"
-}
-```
-
----
-
-## Consultation Notes Endpoints
-
-### 20. Add Consultation Note
-**POST** `/appointments/:appointmentId/consultation-note`
-
-**Description:** Add doctor's consultation notes (after appointment)
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "symptoms": "Fever, cough, sore throat",
-  "diagnosis": "Common cold with mild bronchitis",
-  "treatment": "Rest, fluids, paracetamol",
-  "notes": "Follow up if symptoms persist",
-  "followUpDate": "2026-02-22T10:00:00Z"
-}
-```
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "appointmentId": 1,
-  "doctorId": 5,
-  "symptoms": "Fever, cough, sore throat",
-  "diagnosis": "Common cold with mild bronchitis",
-  "treatment": "Rest, fluids, paracetamol",
-  "followUpDate": "2026-02-22T10:00:00Z",
-  "createdAt": "2026-02-15T14:30:00Z"
-}
-```
-
----
-
-### 21. Get Consultation Note
-**GET** `/appointments/:appointmentId/consultation-note`
-
-**Description:** Retrieve consultation notes for an appointment
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "appointmentId": 1,
-  "doctorId": 5,
-  "symptoms": "Fever, cough, sore throat",
-  "diagnosis": "Common cold",
-  "treatment": "Rest, fluids, paracetamol",
-  "notes": "Follow up if symptoms persist",
-  "followUpDate": "2026-02-22T10:00:00Z",
-  "createdAt": "2026-02-15T14:30:00Z"
-}
-```
-
----
-
-## Prescription Endpoints
-
-### 22. Add Prescription
-**POST** `/appointments/:appointmentId/prescriptions`
-
-**Description:** Add prescription for a student
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "medicineName": "Amoxicillin",
-  "dosage": "500mg",
-  "frequency": "Three times daily",
-  "duration": "7 days",
-  "instructions": "Take with food",
-  "notes": "Complete the full course"
-}
-```
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "appointmentId": 1,
-  "doctorId": 5,
-  "studentId": 1,
-  "medicineName": "Amoxicillin",
-  "dosage": "500mg",
-  "frequency": "Three times daily",
-  "duration": "7 days",
-  "issuedAt": "2026-02-15T14:30:00Z",
-  "expiresAt": "2026-02-22T14:30:00Z"
-}
-```
-
----
-
-### 23. Get Student Prescriptions
-**GET** `/students/:studentId/prescriptions`
-
-**Description:** Get all prescriptions for a student
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Query Parameters:**
-- `active` (optional): Show only active/unexpired prescriptions
-- `page` (optional): Page number
-- `limit` (optional): Results per page
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "medicineName": "Amoxicillin",
-      "dosage": "500mg",
-      "frequency": "Three times daily",
-      "duration": "7 days",
-      "issuedAt": "2026-02-15T14:30:00Z",
-      "expiresAt": "2026-02-22T14:30:00Z",
-      "doctor": {
-        "id": 5,
-        "fullName": "Dr. James Smith"
-      }
-    }
-  ],
-  "total": 5,
-  "page": 1
-}
-```
-
----
-
-## Review & Rating Endpoints
-
-### 24. Add Review
-**POST** `/appointments/:appointmentId/review`
-
-**Description:** Add review for doctor after appointment completion
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "rating": 5,
-  "comment": "Doctor was very professional and helpful"
-}
-```
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "appointmentId": 1,
-  "doctorId": 5,
-  "studentId": 1,
-  "rating": 5,
-  "comment": "Doctor was very professional and helpful",
-  "createdAt": "2026-02-15T15:00:00Z"
-}
-```
-
----
-
-### 25. Get Doctor Reviews
-**GET** `/doctors/:doctorId/reviews`
-
-**Description:** Get all reviews for a doctor
-
-**Query Parameters:**
-- `page` (optional): Page number
-- `limit` (optional): Results per page
-- `sortBy` (optional): newest, oldest, highest, lowest
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "rating": 5,
-      "comment": "Very professional",
-      "studentName": "John Doe",
-      "createdAt": "2026-02-15T15:00:00Z"
-    }
-  ],
-  "total": 42,
-  "averageRating": 4.7,
-  "page": 1
-}
-```
-
----
-
-### 26. Get Student Reviews
-**GET** `/students/:studentId/reviews`
-
-**Description:** Get reviews written by a student
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "rating": 5,
-      "comment": "Great doctor",
-      "doctor": {
-        "id": 5,
-        "fullName": "Dr. James Smith"
-      },
-      "createdAt": "2026-02-15T15:00:00Z"
-    }
-  ]
-}
-```
-
----
-
-## Notification Endpoints
-
-### 27. Create Notification
-**POST** `/notifications`
-
-**Description:** Create a new notification for a user
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "userId": 1,
-  "type": "IN_APP",
-  "title": "Appointment Reminder",
-  "message": "Your appointment is scheduled for tomorrow",
-  "appointmentId": 1
-}
-```
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "userId": 1,
-  "type": "IN_APP",
-  "title": "Appointment Reminder",
-  "message": "Your appointment is scheduled for tomorrow",
-  "status": "PENDING",
-  "appointmentId": 1,
-  "createdAt": "2026-02-15T13:00:00Z"
-}
-```
-
----
-
-### 28. Get User Notifications
-**GET** `/users/:userId/notifications`
-
-**Description:** Get all notifications for a user
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Query Parameters:**
-- `status` (optional): PENDING, SENT, FAILED, OPENED
-- `type` (optional): EMAIL, SMS, IN_APP
-- `unreadOnly` (optional): Show only unread notifications
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "type": "EMAIL",
-      "title": "Appointment Reminder",
-      "message": "Your appointment is in 1 hour",
-      "status": "SENT",
-      "appointmentId": 1,
-      "sentAt": "2026-02-15T13:00:00Z",
-      "openedAt": null,
-      "createdAt": "2026-02-15T13:00:00Z"
-    }
-  ],
-  "total": 10,
-  "unreadCount": 3
-}
-```
-
----
-
-### 29. Get Notification Preferences
-**GET** `/users/:userId/notification-preferences`
-
-**Description:** Get user's notification preferences
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "userId": 1,
-  "emailNotifications": true,
-  "smsNotifications": false,
-  "inAppNotifications": true,
-  "appointmentReminder": true,
-  "reminderMinutesBefore": 60
-}
-```
-
----
-
-### 30. Update Notification Preferences
-**PUT** `/users/:userId/notification-preferences`
-
-**Description:** Update user's notification settings
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "emailNotifications": true,
-  "smsNotifications": true,
-  "inAppNotifications": true,
-  "appointmentReminder": true,
-  "reminderMinutesBefore": 30
-}
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "userId": 1,
-  "emailNotifications": true,
-  "smsNotifications": true,
-  "inAppNotifications": true,
-  "appointmentReminder": true,
-  "reminderMinutesBefore": 30
-}
-```
-
----
-
-### 31. Mark Notification as Read
-**PATCH** `/notifications/:notificationId/read`
-
-**Description:** Mark a notification as opened/read
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "status": "OPENED",
-  "openedAt": "2026-02-15T13:05:00Z"
-}
-```
-
----
-
-## Recurring Appointments Endpoints
-
-### 32. Create Recurring Appointment
-**POST** `/recurring-appointments`
-
-**Description:** Set up recurring appointments
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "studentId": 1,
-  "doctorId": 5,
-  "recurrenceType": "WEEKLY",
-  "frequency": 1,
-  "startDate": "2026-02-15T10:00:00Z",
-  "endDate": "2026-06-15T10:00:00Z",
-  "totalOccurrences": 12,
-  "reason": "Chronic condition follow-up",
-  "notes": "Monthly checkups"
-}
-```
-
-**Recurrence Types:**
-- `NONE` - One time only
-- `DAILY` - Every day
-- `WEEKLY` - Every week
-- `MONTHLY` - Every month
-- `YEARLY` - Every year
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "studentId": 1,
-  "doctorId": 5,
-  "recurrenceType": "WEEKLY",
-  "frequency": 1,
-  "startDate": "2026-02-15T10:00:00Z",
-  "endDate": "2026-06-15T10:00:00Z",
-  "totalOccurrences": 12,
-  "nextOccurrenceDate": "2026-02-22T10:00:00Z",
-  "reason": "Chronic condition follow-up",
-  "isActive": true
-}
-```
-
----
-
-### 33. Get Recurring Appointments
-**GET** `/students/:studentId/recurring-appointments`
-
-**Description:** Get recurring appointments for a student
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "doctorId": 5,
-      "doctor": {
-        "fullName": "Dr. James Smith",
-        "specialization": "General Medicine"
-      },
-      "recurrenceType": "WEEKLY",
-      "frequency": 1,
-      "nextOccurrenceDate": "2026-02-22T10:00:00Z",
-      "isActive": true
-    }
-  ]
-}
-```
-
----
-
-### 34. Update Recurring Appointment
-**PUT** `/recurring-appointments/:recurringId`
-
-**Description:** Update recurring appointment settings
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "frequency": 2,
-  "endDate": "2026-08-15T10:00:00Z",
-  "isActive": true
-}
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "frequency": 2,
-  "endDate": "2026-08-15T10:00:00Z",
-  "isActive": true,
-  "nextOccurrenceDate": "2026-03-01T10:00:00Z"
-}
-```
-
----
-
-### 35. Cancel Recurring Appointment
-**DELETE** `/recurring-appointments/:recurringId`
-
-**Description:** Stop recurring appointments
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "message": "Recurring appointment cancelled"
-}
-```
-
----
-
-## Holiday & Schedule Endpoints
-
-### 36. Get Department Holidays
-**GET** `/departments/:departmentId/holidays`
-
-**Description:** Get holidays for a department
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "title": "New Year",
-      "description": "New Year holiday",
-      "startDate": "2026-01-01",
-      "endDate": "2026-01-01",
-      "allDay": true
-    }
-  ]
-}
-```
-
----
-
-### 37. Add Department Holiday
-**POST** `/departments/:departmentId/holidays`
-
-**Description:** Add holiday/closure for department
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "title": "Spring Break",
-  "description": "Clinic closed",
-  "startDate": "2026-03-15",
-  "endDate": "2026-03-22",
-  "allDay": true
-}
-```
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "departmentId": 1,
-  "title": "Spring Break",
-  "startDate": "2026-03-15",
-  "endDate": "2026-03-22"
-}
-```
-
----
-
-## File Attachment Endpoints
-
-### 38. Upload Attachment
-**POST** `/attachments/upload`
-
-**Description:** Upload medical documents or prescriptions
-
-**Headers:**
-```
-Authorization: Bearer <token>
-Content-Type: multipart/form-data
-```
-
-**Request Body:**
-```
-- file: <binary file>
-- appointmentId: 1 (optional)
-- prescriptionId: 1 (optional)
-- type: MEDICAL_REPORT | PRESCRIPTION | LABS | OTHER
-```
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "fileName": "lab_results.pdf",
-  "fileUrl": "https://storage.example.com/files/lab_results.pdf",
-  "fileSize": 254321,
-  "fileType": "application/pdf",
-  "appointmentId": 1,
-  "uploadedBy": 5,
-  "createdAt": "2026-02-15T14:30:00Z"
-}
-```
-
----
-
-### 39. Get Appointment Attachments
-**GET** `/appointments/:appointmentId/attachments`
-
-**Description:** Get all attachments for an appointment
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "fileName": "lab_results.pdf",
-      "fileUrl": "https://storage.example.com/files/lab_results.pdf",
-      "fileType": "application/pdf",
-      "uploadedBy": 5,
-      "createdAt": "2026-02-15T14:30:00Z"
-    }
-  ]
-}
-```
-
----
-
-### 40. Delete Attachment
-**DELETE** `/attachments/:attachmentId`
-
-**Description:** Remove an attachment
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "message": "Attachment deleted successfully"
-}
-```
-
----
-
-## Audit Log Endpoints
-
-### 41. Get Audit Logs
-**GET** `/admin/audit-logs`
-
-**Description:** Get system action history
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Query Parameters:**
-- `userId` (optional): Filter by user
-- `action` (optional): Filter by action type
-- `entityType` (optional): Filter by entity type (User, Appointment, Doctor, etc.)
-- `startDate` (optional): From date
-- `endDate` (optional): To date
-- `page` (optional): Page number
-- `limit` (optional): Results per page
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "userId": 1,
-      "action": "appointment_booked",
-      "entityType": "Appointment",
-      "entityId": 5,
-      "oldValue": null,
-      "newValue": "{\"status\": \"BOOKED\"}",
-      "description": "Student booked appointment",
-      "ipAddress": "192.168.1.1",
-      "createdAt": "2026-02-15T14:30:00Z"
-    }
-  ],
-  "total": 150,
-  "page": 1
-}
-```
-
----
-
-### 42. Get User Activity
-**GET** `/admin/users/:userId/activity-log`
-
-**Description:** Get detailed activity log for a specific user
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "userId": 1,
-  "userName": "John Doe",
-  "activities": [
-    {
-      "id": 1,
-      "action": "appointment_booked",
-      "entityType": "Appointment",
-      "description": "Booked appointment with Dr. Smith",
-      "timestamp": "2026-02-15T14:30:00Z"
-    }
-  ],
-  "total": 25
-}
-```
-
----
-
-## Appointment Endpoints
-
-### 43. Get Available Time Slots
-**GET** `/appointments/available-slots`
-
-**Description:** Get available appointment slots for a doctor on a specific date
-
-**Query Parameters:**
-- `doctorId` (required): Doctor ID
-- `date` (required): Date in format YYYY-MM-DD
-- `durationMinutes` (optional): Duration of appointment (default: 30)
-
-**Response (200):**
-```json
-{
-  "doctorId": 5,
-  "date": "2026-02-15",
-  "slots": [
-    {
-      "startTime": "09:00",
-      "endTime": "09:30"
-    },
-    {
-      "startTime": "09:30",
-      "endTime": "10:00"
-    },
-    {
-      "startTime": "14:00",
-      "endTime": "14:30"
-    }
-  ]
-}
-```
-
----
-
-### 44. Create Appointment
-**POST** `/appointments`
-
-**Description:** Book an appointment
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "studentId": 1,
-  "doctorId": 5,
-  "scheduledAt": "2026-02-15T14:00:00Z",
+  "id": "appointmentId",
+  "studentId": "studentId",
+  "doctorId": "doctorId",
+  "scheduledAt": "2026-08-10T09:00:00.000Z",
   "durationMinutes": 30,
   "type": "BOOKING",
   "priority": 0,
-  "reason": "General Checkup",
-  "notes": "Follow-up from previous visit"
-}
-```
-
-**Appointment Types:**
-- `BOOKING` - Routine checkup, can come anytime
-- `NORMAL_SICKNESS` - Urgent but not emergency, want to come soon
-- `EMERGENCY` - Critical, needs immediate attention
-
-**Priority Levels:**
-- `0` - Normal
-- `1` - Urgent (NORMAL_SICKNESS)
-- `2` - Emergency
-
-**Response (201):**
-```json
-{
-  "id": 1,
-  "studentId": 1,
-  "doctorId": 5,
-  "scheduledAt": "2026-02-15T14:00:00Z",
-  "durationMinutes": 30,
-  "type": "BOOKING",
-  "priority": 0,
-  "reason": "General Checkup",
+  "reason": "General checkup",
   "status": "BOOKED",
-  "queuePosition": null,
-  "createdAt": "2026-02-11T10:00:00Z"
+  "recurringAppointmentId": null,
+  "createdAt": "2026-07-15T10:00:00.000Z"
 }
+```
+
+`GET /appointments` response is a paginated list of the object above. `PATCH /appointments/:appointmentId` request:
+
+```json
+{ "scheduledAt": "2026-08-10T10:00:00.000Z", "durationMinutes": 30, "reason": "Updated reason" }
+```
+
+The check-in, complete, and no-show endpoints have no request body. Cancel uses:
+
+```json
+{ "cancellationReason": "Unable to attend" }
+```
+
+### Recurring appointments
+
+`POST /doctors/me/recurring-appointments` request:
+
+```json
+{ "studentId": "studentId", "frequency": "WEEKLY", "dayOfWeek": "MONDAY", "startTime": "10:00", "durationMinutes": 30, "startDate": "2026-08-03", "endDate": "2026-12-31" }
+```
+
+Create response, single recurring-schedule response, and list item:
+
+```json
+{ "id": "recurringAppointmentId", "doctorId": "doctorId", "studentId": "studentId", "frequency": "WEEKLY", "dayOfWeek": "MONDAY", "startTime": "10:00", "durationMinutes": 30, "startDate": "2026-08-03", "endDate": "2026-12-31", "isActive": true, "nextOccurrenceAt": "2026-08-03T10:00:00.000Z" }
+```
+
+`PATCH /doctors/me/recurring-appointments/:recurringAppointmentId` accepts mutable schedule fields, including `{ "isActive": false }` to pause it, and returns the updated object. `DELETE` returns `204` without a body. Both list routes return `{ "data": [<recurring schedule>] }`, with pagination where needed.
+
+### Reviews
+
+`POST /appointments/:appointmentId/review` request and response:
+
+```json
+{ "rating": 5, "comment": "Clear and helpful consultation." }
+```
+
+```json
+{ "id": "reviewId", "appointmentId": "appointmentId", "studentId": "studentId", "doctorId": "doctorId", "rating": 5, "comment": "Clear and helpful consultation.", "createdAt": "2026-08-10T10:00:00.000Z" }
+```
+
+Both review list endpoints return a paginated `data` list of this review object.
+
+### Notifications
+
+`GET /notifications/me` response:
+
+```json
+{
+  "data": [{ "id": "notificationId", "type": "APPOINTMENT_BOOKED", "title": "Appointment booked", "message": "Your appointment is confirmed.", "isRead": false, "createdAt": "2026-07-15T10:00:00.000Z" }],
+  "pagination": { "page": 1, "limit": 20, "total": 1 }
+}
+```
+
+The read endpoints return:
+
+```json
+{ "message": "Notifications marked as read" }
+```
+
+`GET /notification-preferences/me` response and `PATCH /notification-preferences/me` request:
+
+```json
+{ "inApp": true, "email": true, "appointmentReminders": true, "recurringAppointmentUpdates": true }
 ```
 
 ---
 
-### 45. Get Appointment Details
-**GET** `/appointments/:appointmentId`
-
-**Description:** Retrieve full appointment details
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "studentId": 1,
-  "doctorId": 5,
-  "scheduledAt": "2026-02-15T14:00:00Z",
-  "durationMinutes": 30,
-  "type": "BOOKING",
-  "priority": 0,
-  "reason": "General Checkup",
-  "notes": "Follow-up from previous visit",
-  "status": "BOOKED",
-  "queuePosition": null,
-  "checkedInAt": null,
-  "cancelledAt": null,
-  "completedAt": null,
-  "createdAt": "2026-02-11T10:00:00Z",
-  "updatedAt": "2026-02-11T10:00:00Z",
-  "student": {
-    "id": 1,
-    "fullName": "John Doe"
-  },
-  "doctor": {
-    "id": 5,
-    "fullName": "Dr. James Smith"
-  }
-}
-```
-
----
-
-### 46. Update Appointment
-**PUT** `/appointments/:appointmentId`
-
-**Description:** Update appointment details (before scheduled time)
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "reason": "Updated reason",
-  "notes": "Updated notes"
-}
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "reason": "Updated reason",
-  "notes": "Updated notes",
-  "updatedAt": "2026-02-11T11:00:00Z"
-}
-```
-
----
-
-### 47. Check In Appointment
-**PATCH** `/appointments/:appointmentId/check-in`
-
-**Description:** Mark student as checked in
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "status": "CHECKED_IN",
-  "checkedInAt": "2026-02-15T14:00:00Z",
-  "updatedAt": "2026-02-15T14:00:00Z"
-}
-```
-
----
-
-### 48. Complete Appointment
-**PATCH** `/appointments/:appointmentId/complete`
-
-**Description:** Mark appointment as completed
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body (optional):**
-```json
-{
-  "notes": "Patient responded well to treatment"
-}
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "status": "COMPLETED",
-  "completedAt": "2026-02-15T14:30:00Z",
-  "updatedAt": "2026-02-15T14:30:00Z"
-}
-```
-
----
-
-### 49. Cancel Appointment
-**PATCH** `/appointments/:appointmentId/cancel`
-
-**Description:** Cancel an appointment
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "cancellationReason": "Student is sick"
-}
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "status": "CANCELLED",
-  "cancelledAt": "2026-02-11T10:30:00Z",
-  "cancellationReason": "Student is sick",
-  "updatedAt": "2026-02-11T10:30:00Z"
-}
-```
-
----
-
-### 50. Mark as No-Show
-**PATCH** `/appointments/:appointmentId/no-show`
-
-**Description:** Mark appointment as no-show (student didn't attend)
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "id": 1,
-  "status": "NO_SHOW",
-  "updatedAt": "2026-02-15T14:30:00Z"
-}
-```
-
----
-
-## Doctor Status & Waiting Queue Endpoints
-
-### 51. Get Doctor Current Status
-**GET** `/doctors/:doctorId/status`
-
-**Description:** Get doctor's current status and waiting queue information
-
-**Response (200):**
-```json
-{
-  "doctorId": 5,
-  "fullName": "Dr. James Smith",
-  "currentStatus": "ATTENDING",
-  "currentPatientId": 1,
-  "estimatedWaitTime": 45,
-  "waitingQueueCount": 3,
-  "updatedAt": "2026-02-15T14:00:00Z"
-}
-```
-
-**Status Values:**
-- `FREE` - Doctor is available
-- `ATTENDING` - Doctor is with a patient
-- `ON_BREAK` - Doctor is on break
-- `OFFLINE` - Doctor is offline
-
----
-
-### 52. Update Doctor Status
-**PATCH** `/doctors/:doctorId/status`
-
-**Description:** Update doctor's current status (use by doctor only)
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "status": "ATTENDING",
-  "currentPatientId": 1,
-  "estimatedWaitTime": 45
-}
-```
-
-**Response (200):**
-```json
-{
-  "doctorId": 5,
-  "currentStatus": "ATTENDING",
-  "currentPatientId": 1,
-  "estimatedWaitTime": 45,
-  "updatedAt": "2026-02-15T14:00:00Z"
-}
-```
-
----
-
-### 53. Get Doctor Waiting Queue
-**GET** `/doctors/:doctorId/queue`
-
-**Description:** Get all patients waiting for a specific doctor
-
-**Query Parameters:**
-- `limit` (optional): Results per page (default: 20)
-- `includeServed` (optional): Include already served patients (default: false)
-
-**Response (200):**
-```json
-{
-  "doctorId": 5,
-  "totalWaiting": 3,
-  "estimatedWaitTime": 45,
-  "queue": [
-    {
-      "queuePosition": 1,
-      "appointmentId": 2,
-      "studentId": 3,
-      "studentName": "Sarah Johnson",
-      "type": "EMERGENCY",
-      "priority": 2,
-      "arrivedAt": "2026-02-15T13:45:00Z",
-      "estimatedWaitTime": 10
-    },
-    {
-      "queuePosition": 2,
-      "appointmentId": 3,
-      "studentId": 4,
-      "studentName": "Mike Wilson",
-      "type": "NORMAL_SICKNESS",
-      "priority": 1,
-      "arrivedAt": "2026-02-15T13:50:00Z",
-      "estimatedWaitTime": 40
-    },
-    {
-      "queuePosition": 3,
-      "appointmentId": 4,
-      "studentId": 5,
-      "studentName": "Lisa Davis",
-      "type": "BOOKING",
-      "priority": 0,
-      "arrivedAt": "2026-02-15T14:00:00Z",
-      "estimatedWaitTime": 70
-    }
-  ]
-}
-```
-
----
-
-### 54. Add Patient to Waiting Queue
-**POST** `/doctors/:doctorId/queue`
-
-**Description:** Add a patient to the waiting queue (called when student arrives)
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Request Body:**
-```json
-{
-  "appointmentId": 2,
-  "studentId": 3,
-  "type": "EMERGENCY",
-  "priority": 2
-}
-```
-
-**Response (201):**
-```json
-{
-  "queueId": 1,
-  "queuePosition": 1,
-  "doctorId": 5,
-  "appointmentId": 2,
-  "studentId": 3,
-  "type": "EMERGENCY",
-  "priority": 2,
-  "estimatedWaitTime": 10,
-  "status": "WAITING",
-  "arrivedAt": "2026-02-15T13:45:00Z"
-}
-```
-
----
-
-### 55. Get Appointment Queue Position
-**GET** `/appointments/:appointmentId/queue-position`
-
-**Description:** Get student's current position in the waiting queue
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "appointmentId": 3,
-  "studentId": 4,
-  "doctorId": 5,
-  "queuePosition": 2,
-  "type": "NORMAL_SICKNESS",
-  "priority": 1,
-  "estimatedWaitTime": 40,
-  "totalWaitingAhead": 1,
-  "arrivedAt": "2026-02-15T13:50:00Z"
-}
-```
-
----
-
-### 56. Mark Patient as Being Served
-**PATCH** `/doctors/:doctorId/queue/:queueId/serve`
-
-**Description:** Mark patient as being served (doctor calls next patient)
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "queueId": 1,
-  "appointmentId": 2,
-  "studentId": 3,
-  "doctorId": 5,
-  "status": "SERVING",
-  "servedAt": "2026-02-15T13:55:00Z",
-  "updatedAt": "2026-02-15T13:55:00Z"
-}
-```
-
----
-
-### 57. Get Queue Statistics
-**GET** `/doctors/:doctorId/queue-stats`
-
-**Description:** Get queue statistics for a doctor
-
-**Response (200):**
-```json
-{
-  "doctorId": 5,
-  "currentDate": "2026-02-15",
-  "totalSeenToday": 12,
-  "totalWaiting": 3,
-  "averageWaitTime": 35,
-  "longestWait": 60,
-  "appointmentsByType": {
-    "EMERGENCY": 1,
-    "NORMAL_SICKNESS": 1,
-    "BOOKING": 1
-  },
-  "appointmentsByPriority": {
-    "EMERGENCY": 1,
-    "URGENT": 1,
-    "NORMAL": 1
-  }
-}
-```
-
----
-
-## Admin Endpoints
-
-### 58. Get All Appointments
-**GET** `/admin/appointments`
-
-**Description:** Retrieve all appointments in the system
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Query Parameters:**
-- `status` (optional): Filter by status
-- `type` (optional): Filter by appointment type (EMERGENCY, BOOKING, NORMAL_SICKNESS)
-- `studentId` (optional): Filter by student
-- `doctorId` (optional): Filter by doctor
-- `startDate` (optional): Filter from date (YYYY-MM-DD)
-- `endDate` (optional): Filter to date (YYYY-MM-DD)
-- `page` (optional): Page number
-- `limit` (optional): Results per page
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "studentId": 1,
-      "doctorId": 5,
-      "scheduledAt": "2026-02-15T14:00:00Z",
-      "type": "BOOKING",
-      "priority": 0,
-      "status": "BOOKED",
-      "student": { "fullName": "John Doe" },
-      "doctor": { "fullName": "Dr. James Smith" }
-    }
-  ],
-  "total": 142,
-  "page": 1,
-  "limit": 20
-}
-```
-
----
-
-### 59. Get Dashboard Statistics
-**GET** `/admin/statistics`
-
-**Description:** Get system-wide statistics
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Query Parameters:**
-- `startDate` (optional): From date (YYYY-MM-DD)
-- `endDate` (optional): To date (YYYY-MM-DD)
-
-**Response (200):**
-```json
-{
-  "totalAppointments": 250,
-  "bookedAppointments": 45,
-  "completedAppointments": 180,
-  "cancelledAppointments": 20,
-  "noShowAppointments": 5,
-  "totalStudents": 500,
-  "totalDoctors": 15,
-  "appointmentsByStatus": {
-    "BOOKED": 45,
-    "COMPLETED": 180,
-    "CANCELLED": 20,
-    "NO_SHOW": 5,
-    "CHECKED_IN": 10,
-    "WAITING": 3
-  },
-  "appointmentsByType": {
-    "EMERGENCY": 20,
-    "NORMAL_SICKNESS": 80,
-    "BOOKING": 150
-  },
-  "appointmentsBySpecialization": {
-    "General Medicine": 80,
-    "Cardiology": 45,
-    "Dermatology": 35
-  },
-  "doctorStatuses": {
-    "FREE": 8,
-    "ATTENDING": 5,
-    "ON_BREAK": 1,
-    "OFFLINE": 1
-  },
-  "averageRating": 4.6
-}
-```
-
----
-
-### 60. Get All Users
-**GET** `/admin/users`
-
-**Description:** Retrieve all users with filters
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Query Parameters:**
-- `role` (optional): Filter by role (STUDENT, DOCTOR, STAFF, ADMIN)
-- `page` (optional): Page number
-- `limit` (optional): Results per page
-
-**Response (200):**
-```json
-{
-  "data": [
-    {
-      "id": 1,
-      "name": "John Doe",
-      "email": "john@example.com",
-      "role": "STUDENT",
-      "createdAt": "2026-01-15T10:00:00Z"
-    }
-  ],
-  "total": 520,
-  "page": 1,
-  "limit": 20
-}
-```
-
----
-
-### 61. Delete User
-**DELETE** `/admin/users/:userId`
-
-**Description:** Remove a user from the system
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "message": "User deleted successfully"
-}
-```
-
----
-
-### 62. Get User Activity Log
-**GET** `/admin/users/:userId/activity`
-
-**Description:** Get activity history for a specific user
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response (200):**
-```json
-{
-  "userId": 1,
-  "activities": [
-    {
-      "action": "appointment_booked",
-      "appointmentId": 1,
-      "type": "BOOKING",
-      "timestamp": "2026-02-11T10:00:00Z"
-    },
-    {
-      "action": "appointment_completed",
-      "appointmentId": 1,
-      "timestamp": "2026-02-15T14:30:00Z"
-    }
-  ]
-}
-```
-
----
-
-## Error Responses
-
-### 400 Bad Request
-```json
-{
-  "error": "Bad Request",
-  "message": "Invalid input data",
-  "details": {
-    "field": "email",
-    "issue": "Invalid email format"
-  }
-}
-```
-
-### 401 Unauthorized
-```json
-{
-  "error": "Unauthorized",
-  "message": "Authentication token is missing or invalid"
-}
-```
-
-### 403 Forbidden
-```json
-{
-  "error": "Forbidden",
-  "message": "You don't have permission to access this resource"
-}
-```
-
-### 404 Not Found
-```json
-{
-  "error": "Not Found",
-  "message": "Resource not found"
-}
-```
-
-### 409 Conflict
-```json
-{
-  "error": "Conflict",
-  "message": "Time slot is already booked",
-  "details": {
-    "reason": "Another appointment exists at this time"
-  }
-}
-```
-
-### 500 Internal Server Error
-```json
-{
-  "error": "Internal Server Error",
-  "message": "An unexpected error occurred"
-}
-```
-
----
-
-## Rate Limiting
-
-All endpoints implement rate limiting:
-- **Standard users**: 100 requests per hour
-- **Admin users**: 500 requests per hour
-
-**Headers:**
-```
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 45
-X-RateLimit-Reset: 1613067600
-```
-
----
-
-## Summary Table
-
-| # | Endpoint | Method | Purpose |
-|---|----------|--------|---------|
-| 1 | `/auth/register` | POST | User registration |
-| 2 | `/auth/login` | POST | User authentication |
-| 3 | `/auth/logout` | POST | User logout |
-| 4 | `/students` | POST | Create student profile |
-| 5 | `/students/:id` | GET | Get student profile |
-| 6 | `/students/:id` | PUT | Update student profile |
-| 7 | `/students/:id/appointments` | GET | Get student appointments |
-| 8 | `/doctors` | POST | Create doctor profile |
-| 9 | `/doctors` | GET | List all doctors |
-| 10 | `/doctors/:id` | GET | Get doctor details |
-| 11 | `/doctors/:id/availability` | POST | Add availability |
-| 12 | `/doctors/:id/availability` | GET | Get availability |
-| 13 | `/doctors/:id/availability/:availId` | PUT | Update availability |
-| 14 | `/doctors/:id/availability/:availId` | DELETE | Delete availability |
-| 15 | `/doctors/:id/appointments` | GET | Get doctor appointments |
-| 16 | `/departments` | GET | Get all departments |
-| 17 | `/departments` | POST | Create department |
-| 18 | `/students/:id/medical-record` | GET | Get medical records |
-| 19 | `/students/:id/medical-record` | POST | Create/update medical record |
-| 20 | `/appointments/:id/consultation-note` | POST | Add consultation note |
-| 21 | `/appointments/:id/consultation-note` | GET | Get consultation note |
-| 22 | `/appointments/:id/prescriptions` | POST | Add prescription |
-| 23 | `/students/:id/prescriptions` | GET | Get prescriptions |
-| 24 | `/appointments/:id/review` | POST | Add review |
-| 25 | `/doctors/:id/reviews` | GET | Get doctor reviews |
-| 26 | `/students/:id/reviews` | GET | Get student reviews |
-| 27 | `/notifications` | POST | Create notification |
-| 28 | `/users/:id/notifications` | GET | Get notifications |
-| 29 | `/users/:id/notification-preferences` | GET | Get notification preferences |
-| 30 | `/users/:id/notification-preferences` | PUT | Update notification preferences |
-| 31 | `/notifications/:id/read` | PATCH | Mark notification as read |
-| 32 | `/recurring-appointments` | POST | Create recurring appointment |
-| 33 | `/students/:id/recurring-appointments` | GET | Get recurring appointments |
-| 34 | `/recurring-appointments/:id` | PUT | Update recurring appointment |
-| 35 | `/recurring-appointments/:id` | DELETE | Cancel recurring appointment |
-| 36 | `/departments/:id/holidays` | GET | Get department holidays |
-| 37 | `/departments/:id/holidays` | POST | Add department holiday |
-| 38 | `/attachments/upload` | POST | Upload attachment |
-| 39 | `/appointments/:id/attachments` | GET | Get appointment attachments |
-| 40 | `/attachments/:id` | DELETE | Delete attachment |
-| 41 | `/admin/audit-logs` | GET | Get audit logs |
-| 42 | `/admin/users/:id/activity-log` | GET | Get user activity log |
-| 43 | `/appointments/available-slots` | GET | Get available slots |
-| 44 | `/appointments` | POST | Book appointment |
-| 45 | `/appointments/:id` | GET | Get appointment details |
-| 46 | `/appointments/:id` | PUT | Update appointment |
-| 47 | `/appointments/:id/check-in` | PATCH | Check in patient |
-| 48 | `/appointments/:id/complete` | PATCH | Complete appointment |
-| 49 | `/appointments/:id/cancel` | PATCH | Cancel appointment |
-| 50 | `/appointments/:id/no-show` | PATCH | Mark as no-show |
-| 51 | `/doctors/:id/status` | GET | Get doctor current status |
-| 52 | `/doctors/:id/status` | PATCH | Update doctor status |
-| 53 | `/doctors/:id/queue` | GET | Get doctor waiting queue |
-| 54 | `/doctors/:id/queue` | POST | Add patient to queue |
-| 55 | `/appointments/:id/queue-position` | GET | Get queue position |
-| 56 | `/doctors/:id/queue/:queueId/serve` | PATCH | Mark patient being served |
-| 57 | `/doctors/:id/queue-stats` | GET | Get queue statistics |
-| 58 | `/admin/appointments` | GET | Get all appointments |
-| 59 | `/admin/statistics` | GET | Get dashboard stats |
-| 60 | `/admin/users` | GET | Get all users |
-| 61 | `/admin/users/:id` | DELETE | Delete user |
-| 62 | `/admin/users/:id/activity` | GET | Get user activity |
-
-**Total Endpoints: 62**
-
----
+## Data-consistency rules to implement
+
+1. **Account/profile separation:** `POST /admin/users` creates only the `User`. `POST /students` and `POST /doctors` create at most one matching profile for the authenticated user. Enforce unique `User.email`, `Student.studentNumber`, `Doctor.licenseNumber`, and one profile per user. Do not allow a user without the required profile to book an appointment, manage availability, or create recurring schedules.
+2. **No duplicate bookings:** use a transaction plus a database-level conflict guard for doctor time ranges. A simple unique index on start time is insufficient for overlapping durations; validate range overlap while holding a transaction/session or model slots explicitly.
+3. **Availability is not an appointment rewrite:** do not silently alter existing bookings when availability changes. Reject conflicting availability edits, as defined above.
+4. **Recurring children remain traceable:** generated appointments retain their `recurringAppointmentId`. Cancelling a recurring schedule stops future generation but does not erase past or already-booked child appointments; the doctor must handle those explicitly.
+5. **Review eligibility is server-enforced:** the UI must not be the only gate. Enforce appointment ownership, `COMPLETED` status, and unique `appointmentId` at the database level.
+6. **Use soft deactivation, not user deletion:** deleting a user with appointments breaks references and history. Inactive users cannot log in or create new appointments, while existing records remain intact.
+
+## Confirmed product decisions
+
+1. Administrators create accounts with email, role, and password only. The password is hashed at rest and is never returned by the API.
+2. Recurring schedules use the clinic time zone `Africa/Lagos` (WAT, UTC+01:00). The implementation must still choose and configure the booking-generation horizon; 90 days is an example, not a fixed decision.
+3. Emergency and urgent appointment types are deferred with queue management. This focused phase supports normal `BOOKING` appointments only.
